@@ -29,9 +29,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- HÀM UPLOAD ASSET (ĐÚNG TỪ DOCS 2026) ---
+# --- HÀM UPLOAD ASSET ---
 def upload_heygen_asset(file_path, api_key):
-    """Upload file lên HeyGen và trả về asset_id"""
     url = "https://upload.heygen.com/v1/asset"
     
     content_type, _ = mimetypes.guess_type(file_path)
@@ -56,49 +55,18 @@ def upload_heygen_asset(file_path, api_key):
             if asset_id:
                 return asset_id
             else:
-                st.error(f"Upload OK nhưng không có asset_id: {resp_json}")
+                st.error("Upload thành công nhưng không tìm thấy asset_id trong response.")
                 return None
         else:
             st.error(f"Lỗi upload ({response.status_code}): {response.text}")
             return None
     except Exception as e:
-        st.error(f"Lỗi mở/đọc file: {str(e)}")
-        return None
-
-# --- HÀM TẠO PHOTO AVATAR TỪ ASSET (BƯỚC QUAN TRỌNG BỊ THIẾU TRƯỚC ĐÂY) ---
-def create_photo_avatar(photo_asset_id, api_key):
-    """Tạo avatar từ photo asset_id để dùng trong video"""
-    url = "https://api.heygen.com/v1/avatar/create"
-    
-    headers = {
-        "X-Api-Key": api_key,
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    
-    payload = {
-        "assets": [photo_asset_id],
-        "type": "photo"  # Hoặc "talking_photo" nếu docs yêu cầu
-    }
-    
-    response = requests.post(url, headers=headers, json=payload)
-    
-    if response.status_code in (200, 201):
-        resp_json = response.json()
-        avatar_id = resp_json.get("data", {}).get("avatar_id")
-        if avatar_id:
-            return avatar_id
-        else:
-            st.error(f"Tạo avatar OK nhưng không có avatar_id: {resp_json}")
-            return None
-    else:
-        st.error(f"Lỗi tạo avatar ({response.status_code}): {response.text}")
+        st.error(f"Lỗi khi upload file: {str(e)}")
         return None
 
 # --- GIAO DIỆN CHÍNH ---
 st.markdown("<h1 style='text-align: center;'>🎙️ Tạo Video MC Ảo</h1>", unsafe_allow_html=True)
 
-# 1. Upload ảnh
 st.subheader("1. Tải ảnh MC lên")
 uploaded_image = st.file_uploader("Chọn file ảnh (jpg, png, webp)", type=["jpg", "png", "webp"])
 image_path = None
@@ -110,7 +78,6 @@ if uploaded_image is not None:
     image_path = temp_img.name
     st.image(image_path, caption="Preview ảnh MC", width=250)
 
-# 2. Âm thanh
 st.subheader("2. Cấu hình âm thanh")
 col1, col2 = st.columns(2)
 audio_path = None
@@ -149,10 +116,7 @@ if 'audio_path' in st.session_state and audio_path is None:
 
 st.info("💡 Âm thanh và miệng phải khớp (lip-sync). HeyGen Avatar IV cho chất lượng cao nhất!")
 
-# Cài đặt video
-res_option = st.selectbox("Độ phân giải", ["1080p", "720p", "480p"])
 ratio_option = st.selectbox("Khung hình", ["9:16 (Portrait)", "16:9 (Landscape)", "1:1 (Square)"])
-
 ratio_map = {
     "9:16 (Portrait)": {"width": 1080, "height": 1920},
     "16:9 (Landscape)": {"width": 1920, "height": 1080},
@@ -170,77 +134,79 @@ if st.button("TẠO VIDEO MC ẢO", type="primary"):
     elif not audio_path or not os.path.exists(audio_path):
         st.error("Tạo hoặc tải âm thanh lên!")
     else:
-        with st.spinner("Đang xử lý (upload + create avatar + generate, 60-180 giây)..."):
+        with st.spinner("Đang xử lý (upload + generate, 30-120 giây)..."):
             try:
                 st.write("⏳ Bước 1: Upload ảnh & âm thanh lên HeyGen...")
                 img_asset_id = upload_heygen_asset(image_path, api_key)
                 aud_asset_id = upload_heygen_asset(audio_path, api_key)
                 
                 if not img_asset_id or not aud_asset_id:
-                    st.error("Upload thất bại. Kiểm tra key/file/mạng.")
+                    st.error("Upload thất bại. Kiểm tra API key, file hoặc mạng.")
                 else:
-                    st.write("✅ Upload xong. Bước 2: Tạo photo avatar từ ảnh...")
-                    avatar_id = create_photo_avatar(img_asset_id, api_key)
+                    st.write("✅ Upload xong. Bước 2: Tạo video...")
                     
-                    if not avatar_id:
-                        st.error("Tạo avatar thất bại.")
+                    gen_url = "https://api.heygen.com/v2/video/generate"
+                    headers = {
+                        "X-Api-Key": api_key,
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    }
+                    
+                    payload = {
+                        "video_inputs": [{
+                            "character": {
+                                "type": "talking_photo",
+                                "photo_asset_id": img_asset_id
+                            },
+                            "voice": {
+                                "type": "audio",
+                                "audio_asset_id": aud_asset_id
+                            }
+                        }],
+                        "dimension": {"width": dim["width"], "height": dim["height"]}
+                    }
+                    
+                    resp = requests.post(gen_url, headers=headers, json=payload)
+                    
+                    if resp.status_code in (200, 201):
+                        data = resp.json()
+                        video_id = data.get("data", {}).get("video_id")
+                        if video_id:
+                            st.success("Yêu cầu gửi OK! Video ID: " + video_id)
+                            
+                            status_url = "https://api.heygen.com/v2/video/status/" + video_id
+                            progress = st.progress(0)
+                            status_placeholder = st.empty()
+                            
+                            for attempt in range(60):
+                                status_resp = requests.get(status_url, headers=headers)
+                                if status_resp.status_code != 200:
+                                    st.error("Lỗi check status: " + status_resp.text)
+                                    break
+                                
+                                s_data = status_resp.json().get("data", {})
+                                status = s_data.get("status")
+                                
+                                if status == "completed":
+                                    video_url = s_data.get("video_url") or s_data.get("download_url")
+                                    if video_url:
+                                        st.success("🎉 Video sẵn sàng!")
+                                        st.video(video_url)
+                                        vid_data = requests.get(video_url).content
+                                        st.download_button("📥 Tải video", vid_data, "mc_ao.mp4", "video/mp4")
+                                    break
+                                elif status in ("failed", "error"):
+                                    st.error("Thất bại: " + s_data.get('error', 'Không rõ lý do'))
+                                    break
+                                else:
+                                    status_placeholder.text("Đang xử lý... " + status + " (thử " + str(attempt+1) + "/60)")
+                                    progress.progress(min((attempt + 1) / 60.0, 1.0))
+                                    time.sleep(5)
+                            else:
+                                st.warning("Timeout chờ video. Kiểm tra dashboard HeyGen.")
+                        else:
+                            st.error("Không có video_id trong response: " + str(data))
                     else:
-                        st.write("✅ Avatar tạo xong. Bước 3: Generate video...")
-                        
-                        gen_url = "https://api.heygen.com/v2/video/generate"
-                        headers = {
-                            "X-Api-Key": api_key,
-                            "Content-Type": "application/json",
-                            "Accept": "application/json"
-                        }
-                        
-                        payload = {
-                            "video_inputs": [{
-                                "character": {
-                                    "type": "avatar",
-                                    "avatar_id": avatar_id,
-                                    "avatar_style": "normal"  # Hoặc "closeUp" nếu cần
-                                },
-                                "voice": {
-                                    "type": "audio",
-                                    "audio_asset_id": aud_asset_id
-                                }
-                            }],
-                            "dimension": {"width": dim["width"], "height": dim["height"]}
-                        }
-                        
-                        resp = requests.post(gen_url, headers=headers, json=payload)
-                        
-                        if resp.status_code in (200, 201):
-                            data = resp.json()
-                            video_id = data.get("data", {}).get("video_id")
-                            if video_id:
-                                st.success(f"Yêu cầu gửi OK! Video ID: {video_id}")
-                                
-                                # Polling status
-                                status_url = f"https://api.heygen.com/v2/video/status/{video_id}"
-                                progress = st.progress(0)
-                                status_placeholder = st.empty()
-                                
-                                for attempt in range(90):  # max ~7.5 phút
-                                    status_resp = requests.get(status_url, headers=headers)
-                                    if status_resp.status_code != 200:
-                                        st.error(f"Lỗi check status: {status_resp.text}")
-                                        break
-                                    
-                                    s_data = status_resp.json().get("data", {})
-                                    status = s_data.get("status")
-                                    
-                                    if status == "completed":
-                                        video_url = s_data.get("video_url") or s_data.get("download_url")
-                                        if video_url:
-                                            st.success("🎉 Video sẵn sàng!")
-                                            st.video(video_url)
-                                            vid_data = requests.get(video_url).content
-                                            st.download_button("📥 Tải video", vid_data, "mc_ao.mp4", "video/mp4")
-                                        break
-                                    elif status in ("failed", "error"):
-                                        st.error(f"Thất bại: {s_data.get('error', 'Không rõ lý do')}")
-                                        break
-                                    else:
-                                        status_placeholder.text(f"Đang
+                        st.error("Lỗi generate (" + str(resp.status_code) + "): " + resp.text)
+            except Exception as ex:
+                st.error("Lỗi tổng: " + str(ex))
