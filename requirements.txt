@@ -1,6 +1,6 @@
 streamlit
 requests
-gTTS
+gtts
 moviepy
 pillow
 
