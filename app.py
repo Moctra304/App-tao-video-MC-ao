@@ -7,7 +7,6 @@ import mimetypes
 from gtts import gTTS
 from PIL import Image
 
-# --- CẤU HÌNH GIAO DIỆN ---
 st.set_page_config(page_title="Tạo Video MC Ảo", layout="centered", page_icon="🎙️")
 
 st.markdown("""
@@ -29,13 +28,39 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- HÀM UPLOAD ASSET ---
-def upload_heygen_asset(file_path, api_key):
+def get_image_mime(file_path):
+    """Lấy MIME type chính xác từ PIL format"""
+    try:
+        img = Image.open(file_path)
+        format_lower = img.format.lower()
+        if format_lower == 'png':
+            return "image/png"
+        elif format_lower in ('jpeg', 'jpg'):
+            return "image/jpeg"
+        elif format_lower == 'webp':
+            return "image/webp"
+        else:
+            st.warning("Format ảnh không hỗ trợ: " + format_lower + ". Fallback mimetypes.")
+            return mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+    except Exception as e:
+        st.error("Lỗi đọc format ảnh: " + str(e))
+        return "application/octet-stream"
+
+def upload_heygen_asset(file_path, api_key, is_image=False):
     url = "https://upload.heygen.com/v1/asset"
     
-    content_type, _ = mimetypes.guess_type(file_path)
-    if not content_type:
-        content_type = "application/octet-stream"
+    if is_image:
+        content_type = get_image_mime(file_path)
+    else:
+        content_type = mimetypes.guess_type(file_path)[0]
+        if not content_type:
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext == '.mp3':
+                content_type = "audio/mpeg"
+            elif ext == '.wav':
+                content_type = "audio/wav"
+            else:
+                content_type = "application/octet-stream"
     
     headers = {
         "X-Api-Key": api_key,
@@ -55,16 +80,15 @@ def upload_heygen_asset(file_path, api_key):
             if asset_id:
                 return asset_id
             else:
-                st.error("Upload thành công nhưng không tìm thấy asset_id trong response.")
+                st.error("Upload OK nhưng không có asset_id. Full response: " + str(resp_json))
                 return None
         else:
-            st.error(f"Lỗi upload ({response.status_code}): {response.text}")
+            st.error("Lỗi upload (" + str(response.status_code) + "): " + response.text)
             return None
     except Exception as e:
-        st.error(f"Lỗi khi upload file: {str(e)}")
+        st.error("Lỗi upload file: " + str(e))
         return None
 
-# --- GIAO DIỆN CHÍNH ---
 st.markdown("<h1 style='text-align: center;'>🎙️ Tạo Video MC Ảo</h1>", unsafe_allow_html=True)
 
 st.subheader("1. Tải ảnh MC lên")
@@ -134,14 +158,14 @@ if st.button("TẠO VIDEO MC ẢO", type="primary"):
     elif not audio_path or not os.path.exists(audio_path):
         st.error("Tạo hoặc tải âm thanh lên!")
     else:
-        with st.spinner("Đang xử lý (upload + generate, 30-120 giây)..."):
+        with st.spinner("Đang xử lý (30-120 giây)..."):
             try:
                 st.write("⏳ Bước 1: Upload ảnh & âm thanh lên HeyGen...")
-                img_asset_id = upload_heygen_asset(image_path, api_key)
-                aud_asset_id = upload_heygen_asset(audio_path, api_key)
+                img_asset_id = upload_heygen_asset(image_path, api_key, is_image=True)
+                aud_asset_id = upload_heygen_asset(audio_path, api_key, is_image=False)
                 
                 if not img_asset_id or not aud_asset_id:
-                    st.error("Upload thất bại. Kiểm tra API key, file hoặc mạng.")
+                    st.error("Upload thất bại. Kiểm tra file định dạng (ảnh phải PNG/JPEG/WEBP thật).")
                 else:
                     st.write("✅ Upload xong. Bước 2: Tạo video...")
                     
@@ -203,9 +227,9 @@ if st.button("TẠO VIDEO MC ẢO", type="primary"):
                                     progress.progress(min((attempt + 1) / 60.0, 1.0))
                                     time.sleep(5)
                             else:
-                                st.warning("Timeout chờ video. Kiểm tra dashboard HeyGen.")
+                                st.warning("Timeout. Kiểm tra dashboard HeyGen.")
                         else:
-                            st.error("Không có video_id trong response: " + str(data))
+                            st.error("Không có video_id: " + str(data))
                     else:
                         st.error("Lỗi generate (" + str(resp.status_code) + "): " + resp.text)
             except Exception as ex:
